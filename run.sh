@@ -1,40 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Run AMI + ADF-IF function/method-level coarse compression on API prompts.
+set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
-MODEL_NAME="Qwen/Qwen2.5-Coder-7B-Instruct"
-MODEL_PATH_NAME="qwencoder-7b-instruct"
-BASE_RESULT_DIR="results/${MODEL_PATH_NAME}"
-BASE_LOG_DIR="logs/${MODEL_PATH_NAME}"
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-Coder-7B-Instruct}"
+DATASET_PATH="${DATASET_PATH:-new_first100.json}"
+DEVICE_MAP="${DEVICE_MAP:-cuda}"
+RESULT_DIR="${RESULT_DIR:-results/api_coarse}"
+LOG_DIR="${LOG_DIR:-logs/api_coarse}"
 
-mkdir -p ${BASE_LOG_DIR}
-mkdir -p ${BASE_RESULT_DIR}
+# Override from the environment for a one-budget run, e.g. TOKEN_BUDGETS="2048".
+read -r -a TOKEN_BUDGETS <<< "${TOKEN_BUDGETS:-2048 4096}"
 
-echo "Starting experiments for ${MODEL_NAME} on GPU ${CUDA_VISIBLE_DEVICES}"
+mkdir -p "$RESULT_DIR" "$LOG_DIR"
 
-# --- CodeCompressor Method Configuration ---
-TARGET_TOKENS=(2048 4096)
-FINE_RATIOS=(0.5 0.8)
-BETAS=(0.0 0.5)
+for token_budget in "${TOKEN_BUDGETS[@]}"; do
+    output_json="$RESULT_DIR/new_first100_ami_adf_if_t${token_budget}.json"
+    log_file="$LOG_DIR/new_first100_ami_adf_if_t${token_budget}.log"
 
-echo "--- Running CodeCompressor with various configurations ---"
-for tokens in "${TARGET_TOKENS[@]}"; do
-    for ratio in "${FINE_RATIOS[@]}"; do
-        for beta in "${BETAS[@]}"; do
-            echo "Running CodeCompressor: target_tokens=${tokens}, fine_ratio=${ratio}, beta=${beta}"
-            python main.py \
-                --model_name ${MODEL_NAME} \
-                --compression_model_name ${MODEL_NAME} \
-                --method code_compressor \
-                --filter_background_tokens_min 5000 \
-                --result_dir "${BASE_RESULT_DIR}" \
-                --num_examples 500 \
-                --code_compressor_target_token ${tokens} \
-                --code_compressor_fine_ratio ${ratio} \
-                --importance_beta ${beta} > "${BASE_LOG_DIR}/code_compressor_t${tokens}_fr${ratio}_b${beta}.log" 2>&1
-            echo "Finished CodeCompressor: target_tokens=${tokens}, fine_ratio=${ratio}, beta=${beta}"
-        done
-    done
+    echo "Running API coarse compression: dataset=$DATASET_PATH, budget=$token_budget, model=$MODEL_NAME"
+    python api_coarse_compress.py \
+        --dataset "$DATASET_PATH" \
+        --token-budget "$token_budget" \
+        --model-name "$MODEL_NAME" \
+        --device-map "$DEVICE_MAP" \
+        --output-json "$output_json" 2>&1 | tee "$log_file"
 done
 
-echo "--- Finished CodeCompressor ---"
+echo "API coarse-compression experiments completed. Results: $RESULT_DIR"

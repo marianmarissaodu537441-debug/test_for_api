@@ -198,6 +198,7 @@ class CodeCompressor:
         model_name: str = "Qwen/Qwen2.5-Coder-7B-Instruct-GPTQ-Int4",
         device_map: str = "cuda",
         model_config: dict = {},
+        initialize_entropy_chunking: bool = True,
     ):
         """
         Initialize the CodeCompressor with a language model for compression.
@@ -206,15 +207,19 @@ class CodeCompressor:
             model_name: The name of the model to load from HuggingFace
             device_map: Device to load the model on
             model_config: Additional configuration for the model
+            initialize_entropy_chunking: Load the fine-grained entropy model.
         """
         self.model_name = model_name
         self.device = device_map
         self.model_config = model_config
         self.load_model(model_name, device_map, model_config)
         
-        # Initialize Entropy chunking with smaller model
-        logger.debug("Initializing Entropy chunking...")
-        self.entropy_chunking = EntropyChunking()
+        # API-recommendation coarse compression does not use fine-grained entropy
+        # chunks, so callers can avoid loading a second language model.
+        self.entropy_chunking = None
+        if initialize_entropy_chunking:
+            logger.debug("Initializing Entropy chunking...")
+            self.entropy_chunking = EntropyChunking()
         
         # Add caching system for model outputs and token information
         self.cache = {
@@ -257,6 +262,21 @@ class CodeCompressor:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
         logger.debug("Model and tokenizer loaded successfully")
+
+    def compress_api_recommendation_coarse(self, code: str, token_budget: int):
+        """Run only the API-recommendation coarse stage on one Python file.
+
+        The import is intentionally local: it avoids a module cycle while letting
+        the new implementation reuse this instance's tokenizer, model, and PPL
+        caches instead of loading another AMI model.
+        """
+        from api_coarse_compressor import APIRecommendationCoarseCompressor
+        return APIRecommendationCoarseCompressor(self).compress(code, token_budget)
+
+    def compress_api_recommendation_dataset(self, records: List[Dict], token_budget: int):
+        """Run the API-recommendation coarse stage for new_first100-style records."""
+        from api_coarse_compressor import APIRecommendationCoarseCompressor
+        return APIRecommendationCoarseCompressor(self).compress_dataset(records, token_budget)
         
     def _manage_cache_size(self, cache_type):
         """
